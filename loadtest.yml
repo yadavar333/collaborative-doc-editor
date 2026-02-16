@@ -1,0 +1,38 @@
+config:
+  target: "ws://localhost:8080"
+  phases:
+    - duration:    10
+      arrivalRate: 50
+      name: "Ramp up — 50 concurrent users"
+  defaults:
+    headers:
+      Content-Type: "application/json"
+
+scenarios:
+  - name: "Simulate concurrent editing"
+    engine: "ws"
+    flow:
+      # Join the document room
+      - send:
+          payload: >
+            {
+              "type": "join_document",
+              "documentId": "00000000-0000-0000-0000-000000000001",
+              "payload": { "userId": "{{ $randomString() }}" }
+            }
+
+      # Send 10 insert operations 1 second apart
+      - loop:
+          - think: 1
+          - send:
+              payload: >
+                {
+                  "type": "submit_op",
+                  "documentId": "00000000-0000-0000-0000-000000000001",
+                  "payload": {
+                    "op":      [{ "insert": "x" }],
+                    "version": 0,
+                    "userId":  "{{ $randomString() }}"
+                  }
+                }
+        count: 10

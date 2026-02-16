@@ -1,0 +1,94 @@
+version: '3.9'
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       collab_doc
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./server/src/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Backend instance 1 ──────────────────────────────────────────────────────
+  backend1:
+    build:
+      context: ./server
+    restart: unless-stopped
+    ports:
+      - "4001:4000"
+    environment:
+      PORT:        4000
+      DB_HOST:     db
+      DB_PORT:     5432
+      DB_NAME:     collab_doc
+      DB_USER:     postgres
+      DB_PASSWORD: password
+      REDIS_URL:   redis://redis:6379
+      JWT_SECRET:  super_secret_change_in_prod
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  # ── Backend instance 2 (proves Redis Pub/Sub cross-instance sync) ───────────
+  backend2:
+    build:
+      context: ./server
+    restart: unless-stopped
+    ports:
+      - "4002:4000"
+    environment:
+      PORT:        4000
+      DB_HOST:     db
+      DB_PORT:     5432
+      DB_NAME:     collab_doc
+      DB_USER:     postgres
+      DB_PASSWORD: password
+      REDIS_URL:   redis://redis:6379
+      JWT_SECRET:  super_secret_change_in_prod
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  # ── React frontend ──────────────────────────────────────────────────────────
+  client:
+    build:
+      context: ./client
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+
+  # ── Nginx load balancer ─────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend1
+      - backend2
+      - client
+
+volumes:
+  pgdata:
