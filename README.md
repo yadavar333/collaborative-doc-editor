@@ -2,7 +2,7 @@
 
 A real-time document editor where multiple people can write in the same document at the same time — think Google Docs, built from scratch. Rich text formatting, live cursors, version history, and dark mode.
 
-**Live demo:** [collabdoc.onrender.com](https://collabdoc.onrender.com)
+**Live demo:** [collabdoc.onrender.com](https://collaborative-doc-editor.onrender.com)
 
 ---
 
