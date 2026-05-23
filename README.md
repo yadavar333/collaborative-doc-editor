@@ -1,107 +1,106 @@
-# Real-time Collaborative Document Editor
+# Collaborative Doc Editor
 
-A Google Docs–style collaborative editor built from scratch. Multiple users can edit the same document simultaneously — conflicts are resolved in real time using a custom Operational Transformation (OT) engine. Horizontally scalable via Nginx load balancing and Redis Pub/Sub.
+A real-time document editor where multiple people can write in the same document at the same time — think Google Docs, built from scratch. Rich text formatting, live cursors, version history, and dark mode.
 
-## Architecture
+**Live demo:** [collabdoc.onrender.com](https://collabdoc.onrender.com)
+
+---
+
+## How it works
+
+When two people type at the same time, the server doesn't just reject one of them. Instead it *transforms* each edit's position based on what happened concurrently — that's Operational Transformation, the same algorithm class Google Docs uses. Both documents converge to the same state automatically.
+
+WebSocket connections are stateful (each connection lives on one server process). To support multiple backend instances, every op is published to a Redis channel — all backends subscribe and forward to their local clients, so someone on backend 1 instantly sees edits from someone on backend 2.
 
 ```
-Browser (Quill.js editor)
-        │  WebSocket + REST
-        ▼
-┌───────────────┐
-│     Nginx     │  Port 8080 — reverse proxy + WebSocket upgrade
-│ Load Balancer │
-└──────┬────────┘
-       │  Round-robin
-  ┌────┴─────────────────┐
-  │                      │
-  ▼                      ▼
-Backend 1            Backend 2          ← two Node.js instances
-(Express + WS)       (Express + WS)
-  │                      │
-  └──────────┬───────────┘
-             │
-     ┌───────┴────────┐
-     │                │
-     ▼                ▼
-PostgreSQL           Redis
-(documents,         (Pub/Sub channel
- operations,         per document)
- users, cursors)
+Browser (Quill.js)
+    │  WebSocket + REST
+    ▼
+ Nginx :8080  ←  reverse proxy + load balancer
+    │  round-robin
+ ┌──┴──────────┐
+ ▼             ▼
+backend1     backend2   (Node.js + Express + ws)
+ └──────┬──────┘
+        │
+   ┌────┴────┐
+   ▼         ▼
+Postgres   Redis
+(docs,     (Pub/Sub —
+ ops,       one channel
+ users)     per doc)
 ```
 
-**Redis Pub/Sub** ensures that an edit submitted to backend1 is broadcast to all clients connected to backend2 — the system stays consistent across instances.
+---
 
 ## Features
 
-- **Custom OT Engine** — pure JS character-based Operational Transformation. 9 component-interaction rules, convergence guaranteed.
-- **Real-time sync** — WebSocket-based; edits appear < 50 ms on LAN.
-- **Remote cursors** — coloured per-user cursor positions via `quill-cursors`.
-- **Presence bar** — live avatar strip showing all connected collaborators.
-- **JWT Auth** — register/login, Bearer-token protected REST + WS routes.
-- **Document sharing** — share by email with `editor` or `viewer` role.
-- **Version history** — full operation log with point-in-time reconstruction.
-- **Snapshotting** — auto-compacts every 100 ops to keep document load fast.
-- **Export** — download current document as `.txt`.
-- **Horizontal scaling** — Nginx round-robin + Redis fanout, proven by load test.
+- **Custom OT engine** — pure JS, no external library, rich-text aware (bold, lists, code blocks, etc.)
+- **Real-time sync** — edits appear in < 50 ms on LAN
+- **Live cursors** — coloured per-user cursor positions
+- **Presence bar** — see who's editing right now
+- **Rich text** — bold, italic, headers, bullet lists, code blocks
+- **JWT auth** — register / login, token-protected routes
+- **Document sharing** — invite collaborators by email as editor or viewer
+- **Version history** — every op is stored; browse and preview any past state
+- **Export** — download the current document as plain text
+- **Dark / light mode** — persisted across sessions
+- **Delete documents** — editors can permanently remove a doc
 
-## Quick Start
+---
+
+## Run locally
+
+Requires Docker.
 
 ```bash
-# 1. Clone
 git clone https://github.com/yadavar333/collaborative-doc-editor
 cd collaborative-doc-editor
 
-# 2. Bring up the full stack
 docker compose up --build
-
-# Application: http://localhost:8080
-# Backend 1:   http://localhost:4001/health
-# Backend 2:   http://localhost:4002/health
 ```
 
-## Run Tests
+| URL | What |
+|-----|------|
+| http://localhost:8080 | The app |
+| http://localhost:4001/health | Backend 1 health check |
+| http://localhost:4002/health | Backend 2 health check |
+
+---
+
+## Run tests
 
 ```bash
 cd server
 npm install
 npm test
-# 19 OT engine unit tests — all passing
 ```
 
-## Load Test
+19 unit tests covering the OT engine — all passing.
 
-```bash
-npm install -g artillery
-artillery run loadtest.yml
-# Simulates 50 concurrent WebSocket users sending ops for 10 seconds
-```
+---
 
-## What This Project Demonstrates
+## Deploy for free
 
-- **Operational Transformation** — the algorithm at the core of Google Docs. When two users type at the same time, the server transforms their operations so both documents converge to the same state.
-- **Scaling WebSockets** — WebSockets are stateful (each connection lives on one server process), but Redis Pub/Sub lets multiple instances share state without coupling.
-- **Event-sourcing pattern** — every edit is stored as an immutable operation. The document state is derived by replaying operations from a snapshot.
-- **Snapshotting** — replaying millions of operations on every load is slow. Periodic snapshots cap the replay cost at O(ops since last snapshot).
+The whole stack runs as a single Node.js service (frontend is served as static files):
 
-## What I Learned
+1. **[Render](https://render.com)** — web service, free tier (`render.yaml` included)
+2. **[Neon](https://neon.tech)** — free Postgres (run `server/src/db/schema.sql` in their SQL editor)
+3. **[Upstash](https://upstash.com)** — free Redis (copy the `rediss://` URL)
 
-I learned how hard it is to resolve text conflicts without simply locking the document. My first attempt was to just reject the second edit — but that breaks the user experience completely. Reading about OT showed me that the key insight is *transforming the position* of an operation based on what else happened concurrently, not rejecting it.
+Set three env vars in Render: `DATABASE_URL`, `REDIS_URL`, `SERVE_CLIENT=true`.
 
-I also learned that WebSockets are inherently single-server — my first Redis-free version worked fine with one backend, but the moment I spun up a second Node.js process, clients on different instances couldn't see each other's edits. Redis Pub/Sub was the natural solution: each backend publishes incoming ops to a channel, all backends subscribe and forward to their local WebSocket clients.
-
-The snapshot service surprised me — I expected the hard part to be OT, but it was actually the version-history reconstruction. Figuring out how to efficiently find the closest snapshot and replay only the delta took careful thought about the data model.
+---
 
 ## Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 18, Quill.js, quill-cursors, React Router, Vite |
-| Backend | Node.js 20, Express, ws (WebSocket), JWT |
-| OT Engine | Custom JS (no external OT library) |
-| Database | PostgreSQL 15 (operations, snapshots, users) |
+| Frontend | React 18, Quill.js, React Router, Vite |
+| Backend | Node.js 20, Express, ws |
+| OT engine | Custom JS — no library |
+| Database | PostgreSQL 15 |
 | Pub/Sub | Redis 7 |
-| Proxy | Nginx (load balancer + WS upgrade) |
+| Proxy | Nginx (local Docker only) |
 | Containers | Docker, Docker Compose |
-| Tests | Jest (19 OT unit tests) |
-| Load test | Artillery |
+| Tests | Jest |
