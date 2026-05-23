@@ -16,6 +16,18 @@ const redisSubscribed = new Map();
 /** Counter per doc to trigger snapshot every 10 ops */
 const opCounter = new Map();
 
+/**
+ * docId → Promise  (tail of the per-document op queue)
+ *
+ * ws.on('message') is called for every message before the previous async
+ * handler resolves, so two ops from the same user can both read the same
+ * document version from the DB and race to INSERT at version+1 — the second
+ * one hits the UNIQUE constraint, gets dropped silently, and the client's
+ * Quill diverges from the server snapshot.  Chaining ops onto a per-document
+ * Promise serialises them without blocking the event loop for other documents.
+ */
+const docOpQueues = new Map();
+
 function broadcast(documentId, payload, exceptWs = null) {
   const room = documentRooms.get(documentId);
   if (!room) return;
@@ -42,6 +54,7 @@ function leaveRoom(documentId, ws) {
   if (room.size === 0) {
     documentRooms.delete(documentId);
     documentMembers.delete(documentId);
+    docOpQueues.delete(documentId);
     unsubscribeFromDoc(documentId).catch(() => {});
     redisSubscribed.delete(documentId);
   }
@@ -53,6 +66,18 @@ async function ensureRedisSubscribed(documentId) {
   await subscribeToDoc(documentId, (payload) => {
     broadcast(documentId, payload, payload._originWs);
   });
+}
+
+/**
+ * Enqueue an op for a document so concurrent ops from the same (or different)
+ * clients never race at the DB level.  Returns the Promise for the queued op.
+ */
+function enqueueOp(ws, documentId, payload, authedUserId) {
+  const tail = docOpQueues.get(documentId) ?? Promise.resolve();
+  const next = tail.then(() => handleSubmitOp(ws, documentId, payload, authedUserId));
+  // Store a silenced tail so one failed op doesn't jam the queue for everyone.
+  docOpQueues.set(documentId, next.catch(() => {}));
+  return next;
 }
 
 async function handleSubmitOp(ws, documentId, payload, authedUserId) {
@@ -205,7 +230,7 @@ export function initWebSocketManager(wss) {
       // ── Submit operation ────────────────────────────────────────────────────
       if (type === 'submit_op') {
         try {
-          await handleSubmitOp(ws, documentId, payload, authedUserId);
+          await enqueueOp(ws, documentId, payload, authedUserId);
         } catch (err) {
           console.error('[ws] submit_op error', err.message);
           ws.send(JSON.stringify({ type: 'error', message: 'Operation failed' }));
