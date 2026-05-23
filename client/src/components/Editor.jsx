@@ -18,11 +18,21 @@ function colorForUser(uid) {
 }
 
 // ── Convert Quill Delta → OT op ───────────────────────────────────────────────
+// Attributes (bold, italic, list, code-block, etc.) are preserved so that
+// formatting ops are synced exactly like text ops.
 function deltaToOtOp(delta) {
   return delta.ops.map((op) => {
-    if (op.retain  !== undefined) return { retain:  op.retain };
-    if (op.insert  !== undefined) return { insert:  typeof op.insert === 'string' ? op.insert : '￼' };
-    if (op.delete  !== undefined) return { delete:  op.delete };
+    if (op.retain !== undefined) {
+      const c = { retain: op.retain };
+      if (op.attributes) c.attributes = op.attributes;
+      return c;
+    }
+    if (op.insert !== undefined) {
+      const c = { insert: typeof op.insert === 'string' ? op.insert : '￼' };
+      if (op.attributes) c.attributes = op.attributes;
+      return c;
+    }
+    if (op.delete !== undefined) return { delete: op.delete };
     return null;
   }).filter(Boolean);
 }
@@ -30,8 +40,16 @@ function deltaToOtOp(delta) {
 // ── Convert OT op → Quill Delta ──────────────────────────────────────────────
 function otOpToDelta(op) {
   return { ops: op.map((c) => {
-    if (c.retain !== undefined) return { retain: c.retain };
-    if (c.insert !== undefined) return { insert: c.insert };
+    if (c.retain !== undefined) {
+      const d = { retain: c.retain };
+      if (c.attributes) d.attributes = c.attributes;
+      return d;
+    }
+    if (c.insert !== undefined) {
+      const d = { insert: c.insert };
+      if (c.attributes) d.attributes = c.attributes;
+      return d;
+    }
     if (c.delete !== undefined) return { delete: c.delete };
     return null;
   }).filter(Boolean) };
@@ -67,12 +85,18 @@ export default function Editor({ documentId, userId, authToken }) {
     const cursors = quill.getModule('cursors');
 
     // ── Init WS Client ─────────────────────────────────────────────────────────
+    // Document content and version are loaded via the doc_state WS message that
+    // the server sends immediately after join — no separate REST fetch needed.
+    // This eliminates the race where a parallel REST call could overwrite Quill
+    // content already applied from the WS stream, causing A→B sync loss.
     const ws = new WSClient(
       `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/socket`,
       documentId,
       userId,
-      // onRemoteOp
+      // onRemoteOp — genuine op from another user; skip if already covered
+      // by the doc_state snapshot (version guard prevents double-application).
       (op, version) => {
+        if (version <= versionRef.current) return;
         versionRef.current = version;
         quill.updateContents(otOpToDelta(op), 'silent');
       },
@@ -89,6 +113,16 @@ export default function Editor({ documentId, userId, authToken }) {
           else delete next[uid];
           return next;
         });
+      },
+      // onOwnOpAck — own echo suppressed; advance versionRef to server version.
+      (serverVersion) => {
+        versionRef.current = serverVersion;
+      },
+      // onDocState — authoritative snapshot sent by server on join; initialise
+      // Quill content and versionRef from this single source of truth.
+      (content, version) => {
+        quill.setText(content || '', 'silent');
+        versionRef.current = version;
       },
     );
     wsRef.current = ws;

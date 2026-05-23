@@ -14,7 +14,11 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => localStorage.getItem('token'));
   const [user,  setUser]  = useState(() => {
     const t = localStorage.getItem('token');
-    return t ? parseJwt(t) : null;
+    if (!t) return null;
+    const claims = parseJwt(t);
+    // JWT payload uses `userId`; normalise to `id` so the rest of the app
+    // always reads user.id regardless of how auth state was initialised.
+    return claims ? { id: claims.userId, email: claims.email } : null;
   });
 
   const login = useCallback((newToken, userData) => {

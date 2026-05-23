@@ -7,6 +7,9 @@ import jwt from 'jsonwebtoken';
 /** docId → Set<ws>  (all sockets in that document room) */
 const documentRooms = new Map();
 
+/** docId → Map<ws, userId>  (tracks which user each socket belongs to) */
+const documentMembers = new Map();
+
 /** docId → bool  (whether we already subscribed to Redis for this doc) */
 const redisSubscribed = new Map();
 
@@ -24,17 +27,21 @@ function broadcast(documentId, payload, exceptWs = null) {
   }
 }
 
-function joinRoom(documentId, ws) {
+function joinRoom(documentId, ws, userId) {
   if (!documentRooms.has(documentId)) documentRooms.set(documentId, new Set());
   documentRooms.get(documentId).add(ws);
+  if (!documentMembers.has(documentId)) documentMembers.set(documentId, new Map());
+  documentMembers.get(documentId).set(ws, userId);
 }
 
 function leaveRoom(documentId, ws) {
   const room = documentRooms.get(documentId);
   if (!room) return;
   room.delete(ws);
+  documentMembers.get(documentId)?.delete(ws);
   if (room.size === 0) {
     documentRooms.delete(documentId);
+    documentMembers.delete(documentId);
     unsubscribeFromDoc(documentId).catch(() => {});
     redisSubscribed.delete(documentId);
   }
@@ -48,13 +55,19 @@ async function ensureRedisSubscribed(documentId) {
   });
 }
 
-async function handleSubmitOp(ws, documentId, payload) {
+async function handleSubmitOp(ws, documentId, payload, authedUserId) {
   const { op, version, userId } = payload;
+  // Always write the JWT-verified identity to the DB. Using the client-supplied
+  // userId would (a) be a security risk and (b) fail with a FK violation when
+  // the client falls back to an anonymous UUID that isn't in the users table.
+  const dbUserId = authedUserId || userId;
 
-  // Fetch all operations stored at versions >= submitted version
+  // Fetch only operations that arrived AFTER the version the client was at.
+  // version > $2 (not >=) because the client has already incorporated the op
+  // at exactly $2 — transforming against it again would corrupt positions.
   const { rows: pendingOps } = await query(
     `SELECT operation_data FROM operations
-     WHERE document_id = $1 AND version >= $2
+     WHERE document_id = $1 AND version > $2
      ORDER BY version ASC`,
     [documentId, version],
   );
@@ -79,7 +92,7 @@ async function handleSubmitOp(ws, documentId, payload) {
   await query(
     `INSERT INTO operations (document_id, user_id, version, operation_data)
      VALUES ($1, $2, $3, $4)`,
-    [documentId, userId, newVersion, JSON.stringify(transformedOp)],
+    [documentId, dbUserId, newVersion, JSON.stringify(transformedOp)],
   );
 
   // Apply op to snapshot and bump version
@@ -131,14 +144,44 @@ export function initWebSocketManager(wss) {
           }
         }
 
+        const joiningUserId = authedUserId || payload?.userId;
         currentDocId = documentId;
-        joinRoom(documentId, ws);
+        joinRoom(documentId, ws, joiningUserId);
+
+        // Subscribe to Redis BEFORE querying the DB. Any op published between
+        // the subscribe and the query arrives as a remote_op that the client
+        // buffers; doc_state then tells the client which ops are already baked
+        // into the snapshot so the buffer can be replayed correctly.
         await ensureRedisSubscribed(documentId);
 
-        // Broadcast presence
+        // Send the authoritative document state so the client can initialise
+        // without a separate REST call (which races against the WS stream).
+        const { rows: [docSnap] } = await query(
+          'SELECT content_snapshot, version FROM documents WHERE id = $1',
+          [documentId],
+        );
+        if (docSnap && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type:    'doc_state',
+            content: docSnap.content_snapshot,
+            version: docSnap.version,
+          }));
+        }
+
+        // Tell the joining client about every user already in the room.
+        const members = documentMembers.get(documentId);
+        if (members) {
+          for (const [memberWs, memberId] of members) {
+            if (memberWs !== ws && memberId && ws.readyState === 1) {
+              ws.send(JSON.stringify({ type: 'presence_update', userId: memberId, event: 'joined' }));
+            }
+          }
+        }
+
+        // Broadcast the new joiner's presence to everyone (including themselves).
         await publishDocUpdate(documentId, {
           type: 'presence_update',
-          userId: authedUserId || payload?.userId,
+          userId: joiningUserId,
           event: 'joined',
         });
         return;
@@ -147,7 +190,7 @@ export function initWebSocketManager(wss) {
       // ── Submit operation ────────────────────────────────────────────────────
       if (type === 'submit_op') {
         try {
-          await handleSubmitOp(ws, documentId, payload);
+          await handleSubmitOp(ws, documentId, payload, authedUserId);
         } catch (err) {
           console.error('[ws] submit_op error', err.message);
           ws.send(JSON.stringify({ type: 'error', message: 'Operation failed' }));

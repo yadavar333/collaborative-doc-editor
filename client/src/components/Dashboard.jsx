@@ -39,6 +39,14 @@ export default function Dashboard() {
     } catch (err) { setError(err.message); }
   }
 
+  async function deleteDocument(docId) {
+    if (!window.confirm('Delete this document? This cannot be undone.')) return;
+    try {
+      await apiFetch(`/api/documents/${docId}`, { method: 'DELETE' });
+      setDocs((d) => d.filter((doc) => doc.id !== docId));
+    } catch (err) { setError(err.message); }
+  }
+
   async function shareDocument() {
     if (!shareDoc || !shareEmail) return;
     try {
@@ -98,7 +106,10 @@ export default function Dashboard() {
                   </div>
                 </div>
                 {doc.role === 'editor' && (
-                  <button onClick={() => setShareDoc(doc.id)} style={outlineBtn}>Share</button>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => setShareDoc(doc.id)} style={outlineBtn}>Share</button>
+                    <button onClick={() => deleteDocument(doc.id)} style={deleteBtn}>Delete</button>
+                  </div>
                 )}
               </div>
             ))}
@@ -138,3 +149,4 @@ const outlineBtn = { padding: '8px 14px', background: '#fff', color: '#6366f1', 
 const docCard    = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 };
 const backdrop   = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 };
 const modal      = { background: '#fff', borderRadius: 14, padding: 28, width: 360, boxShadow: '0 10px 40px rgba(0,0,0,.15)' };
+const deleteBtn  = { padding: '8px 14px', background: '#fff', color: '#ef4444', border: '1px solid #ef4444', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13 };

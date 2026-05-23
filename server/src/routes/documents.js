@@ -43,6 +43,45 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/documents/:id — fetch a single document's content and version
+router.get('/:id', requireAuth, async (req, res) => {
+  const { userId } = req.user;
+  const { id: documentId } = req.params;
+  try {
+    const { rows: [row] } = await query(
+      `SELECT d.id, d.title, d.version, d.content_snapshot, d.created_at, d.updated_at, du.role
+       FROM documents d
+       JOIN document_users du ON du.document_id = d.id
+       WHERE d.id = $1 AND du.user_id = $2`,
+      [documentId, userId],
+    );
+    if (!row) return res.status(404).json({ error: 'Document not found' });
+    res.json(row);
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch document' });
+  }
+});
+
+// DELETE /api/documents/:id — permanently delete a document (editors only)
+router.delete('/:id', requireAuth, async (req, res) => {
+  const { userId } = req.user;
+  const { id: documentId } = req.params;
+  try {
+    const { rows: [membership] } = await query(
+      `SELECT role FROM document_users WHERE document_id = $1 AND user_id = $2`,
+      [documentId, userId],
+    );
+    if (!membership) return res.status(404).json({ error: 'Document not found' });
+    if (membership.role !== 'editor') {
+      return res.status(403).json({ error: 'Only editors can delete this document' });
+    }
+    await query('DELETE FROM documents WHERE id = $1', [documentId]);
+    res.json({ message: 'Document deleted' });
+  } catch {
+    res.status(500).json({ error: 'Failed to delete document' });
+  }
+});
+
 // POST /api/documents/:id/share — add a user by email
 router.post('/:id/share', requireAuth, async (req, res) => {
   const { id: documentId } = req.params;

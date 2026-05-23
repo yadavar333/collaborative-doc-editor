@@ -64,14 +64,26 @@ class OpCursor {
 
 // ── Helper: push component, merging adjacent same-type components ─────────────
 
+function sameAttrs(a, b) {
+  // Treat undefined and absent the same way; compare by stable serialisation.
+  const sa = a ? JSON.stringify(a) : null;
+  const sb = b ? JSON.stringify(b) : null;
+  return sa === sb;
+}
+
 function push(arr, comp) {
   if (!arr.length) { arr.push({ ...comp }); return; }
   const last = arr[arr.length - 1];
-  if (comp.retain !== undefined && last.retain !== undefined) {
+  // Only merge adjacent components of the same type AND same attributes.
+  // Components with differing attributes must stay separate so that Quill
+  // can apply the correct formatting to each character range.
+  if (comp.retain !== undefined && last.retain !== undefined
+      && sameAttrs(comp.attributes, last.attributes)) {
     last.retain += comp.retain;
   } else if (comp.delete !== undefined && last.delete !== undefined) {
     last.delete += comp.delete;
-  } else if (comp.insert !== undefined && last.insert !== undefined) {
+  } else if (comp.insert !== undefined && last.insert !== undefined
+             && sameAttrs(comp.attributes, last.attributes)) {
     last.insert += comp.insert;
   } else {
     arr.push({ ...comp });
@@ -143,32 +155,36 @@ export function transform(op1, op2) {
 
     // ── One side exhausted (only retain/delete left on the other) ─────────────
     if (!c1.hasMore()) {
-      const t2 = c2.type();
-      const n  = c2.size();
-      if (t2 === 'retain') push(prime2, { retain: n });
+      const t2   = c2.type();
+      const n    = c2.size();
+      const attrs2 = c2._op[c2._idx].attributes;
+      if (t2 === 'retain') push(prime2, attrs2 ? { retain: n, attributes: attrs2 } : { retain: n });
       else if (t2 === 'delete') push(prime2, { delete: n });
       c2.consume(n);
       continue;
     }
 
     if (!c2.hasMore()) {
-      const t1 = c1.type();
-      const n  = c1.size();
-      if (t1 === 'retain') push(prime1, { retain: n });
+      const t1   = c1.type();
+      const n    = c1.size();
+      const attrs1 = c1._op[c1._idx].attributes;
+      if (t1 === 'retain') push(prime1, attrs1 ? { retain: n, attributes: attrs1 } : { retain: n });
       else if (t1 === 'delete') push(prime1, { delete: n });
       c1.consume(n);
       continue;
     }
 
     // ── Both have retain/delete remaining ────────────────────────────────────
-    const t1 = c1.type();
-    const t2 = c2.type();
-    const n  = Math.min(c1.size(), c2.size());
+    const t1     = c1.type();
+    const t2     = c2.type();
+    const n      = Math.min(c1.size(), c2.size());
+    const attrs1 = c1._op[c1._idx].attributes;
+    const attrs2 = c2._op[c2._idx].attributes;
 
     if (t1 === 'retain' && t2 === 'retain') {
-      // Both keep these characters — both primes retain them
-      push(prime1, { retain: n });
-      push(prime2, { retain: n });
+      // Both keep these characters — preserve each op's attributes independently.
+      push(prime1, attrs1 ? { retain: n, attributes: attrs1 } : { retain: n });
+      push(prime2, attrs2 ? { retain: n, attributes: attrs2 } : { retain: n });
 
     } else if (t1 === 'delete' && t2 === 'retain') {
       // op1 deletes chars that op2 keeps → op1' still deletes, op2' is silent
