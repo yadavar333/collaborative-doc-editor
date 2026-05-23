@@ -148,24 +148,31 @@ export function initWebSocketManager(wss) {
         currentDocId = documentId;
         joinRoom(documentId, ws, joiningUserId);
 
-        // Subscribe to Redis BEFORE querying the DB. Any op published between
-        // the subscribe and the query arrives as a remote_op that the client
-        // buffers; doc_state then tells the client which ops are already baked
-        // into the snapshot so the buffer can be replayed correctly.
-        await ensureRedisSubscribed(documentId);
+        try {
+          // Subscribe to Redis BEFORE querying the DB so no op published in
+          // the gap is missed (client buffers pre-doc_state ops).
+          await ensureRedisSubscribed(documentId);
+        } catch (err) {
+          console.error('[ws] redis subscribe error', err.message);
+          // Continue without Redis — single-instance presence still works via
+          // direct sends below; cross-instance sync will be degraded.
+        }
 
-        // Send the authoritative document state so the client can initialise
-        // without a separate REST call (which races against the WS stream).
-        const { rows: [docSnap] } = await query(
-          'SELECT content_snapshot, version FROM documents WHERE id = $1',
-          [documentId],
-        );
-        if (docSnap && ws.readyState === 1) {
-          ws.send(JSON.stringify({
-            type:    'doc_state',
-            content: docSnap.content_snapshot,
-            version: docSnap.version,
-          }));
+        // Send the authoritative document state.
+        try {
+          const { rows: [docSnap] } = await query(
+            'SELECT content_snapshot, version FROM documents WHERE id = $1',
+            [documentId],
+          );
+          if (docSnap && ws.readyState === 1) {
+            ws.send(JSON.stringify({
+              type:    'doc_state',
+              content: docSnap.content_snapshot,
+              version: docSnap.version,
+            }));
+          }
+        } catch (err) {
+          console.error('[ws] doc_state query error', err.message);
         }
 
         // Tell the joining client about every user already in the room.
@@ -178,12 +185,20 @@ export function initWebSocketManager(wss) {
           }
         }
 
-        // Broadcast the new joiner's presence to everyone (including themselves).
-        await publishDocUpdate(documentId, {
-          type: 'presence_update',
+        // Send the joiner their OWN presence directly — no Redis round-trip,
+        // so it works even if Redis is momentarily unavailable.
+        if (joiningUserId && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'presence_update', userId: joiningUserId, event: 'joined' }));
+        }
+
+        // Also broadcast via Redis so other users in the room (on any instance)
+        // learn about the new joiner. Failure here is non-fatal.
+        publishDocUpdate(documentId, {
+          type:   'presence_update',
           userId: joiningUserId,
-          event: 'joined',
-        });
+          event:  'joined',
+        }).catch((err) => console.error('[ws] presence broadcast error', err.message));
+
         return;
       }
 
@@ -200,11 +215,11 @@ export function initWebSocketManager(wss) {
 
       // ── Cursor move ─────────────────────────────────────────────────────────
       if (type === 'cursor_move') {
-        await publishDocUpdate(documentId, {
-          type: 'remote_cursor',
-          userId: payload.userId,
+        publishDocUpdate(documentId, {
+          type:     'remote_cursor',
+          userId:   payload.userId,
           position: payload.position,
-        });
+        }).catch(() => {});
         return;
       }
     });
