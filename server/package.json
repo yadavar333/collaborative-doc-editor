@@ -2,6 +2,7 @@
   "name": "collab-doc-server",
   "version": "1.0.0",
   "type": "module",
+  "engines": { "node": ">=20 <21" },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",

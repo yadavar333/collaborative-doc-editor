@@ -26,7 +26,7 @@ app.get('/health', (_, res) => res.json({ status: 'ok' }));
 // In local Docker dev the frontend runs in its own container; on Render/free
 // hosts a single dyno serves both API and static files from the same origin.
 if (process.env.SERVE_CLIENT === 'true') {
-  const clientDist = join(__dirname, '../../client-dist');
+  const clientDist = join(__dirname, '../client-dist');
   app.use(express.static(clientDist));
   app.get('*', (_, res) => res.sendFile(join(clientDist, 'index.html')));
 }
