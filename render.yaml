@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: collaborative-doc-editor
+    runtime: node
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SERVE_CLIENT
+        value: "true"
+      - key: DATABASE_URL
+        sync: false        # set manually in Render dashboard
+      - key: REDIS_URL
+        sync: false        # set manually in Render dashboard
+      - key: JWT_SECRET
+        generateValue: true
