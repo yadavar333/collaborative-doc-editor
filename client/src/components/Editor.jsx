@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import Quill from 'quill';
 import QuillCursors from 'quill-cursors';
+import { Sun, Moon, Download, Clock, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { WSClient } from '../utils/wsClient.js';
 import PresenceBar from './PresenceBar.jsx';
 import HistorySidebar from './HistorySidebar.jsx';
+import { useTheme } from '../context/ThemeContext.jsx';
 import 'quill/dist/quill.snow.css';
 
 Quill.register('modules/cursors', QuillCursors);
@@ -61,8 +64,10 @@ export default function Editor({ documentId, userId, authToken }) {
   const wsRef       = useRef(null);
   const versionRef  = useRef(0);
 
-  const [showHistory,  setShowHistory]  = useState(false);
+  const [showHistory,   setShowHistory]   = useState(false);
   const [presenceUsers, setPresenceUsers] = useState({});
+  const { theme, toggle } = useTheme();
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!editorRef.current || quillRef.current) return;
@@ -157,28 +162,49 @@ export default function Editor({ documentId, userId, authToken }) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      {/* ── Toolbar row ─────────────────────────────────────────────────── */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg)' }}>
+
+      {/* ── Top bar ───────────────────────────────────────────────────────── */}
       <div style={{
-        padding: '8px 16px',
-        borderBottom: '1px solid #e5e7eb',
+        padding: '0 16px',
+        height: 48,
+        borderBottom: '1px solid var(--border)',
         display: 'flex',
-        justifyContent: 'space-between',
         alignItems: 'center',
-        background: '#fff',
+        justifyContent: 'space-between',
+        background: 'var(--bg-card)',
+        flexShrink: 0,
       }}>
-        <PresenceBar users={presenceUsers} currentUser={userId} />
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={handleExport} style={btnStyle}>Export TXT</button>
-          <button onClick={() => setShowHistory((s) => !s)} style={btnStyle}>
-            {showHistory ? 'Close History' : 'History'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            onClick={() => navigate('/')}
+            className="ui-btn ui-btn-ghost ui-btn-sm"
+            title="Back to documents"
+          >
+            <ArrowLeft size={13} />
+          </button>
+          <PresenceBar users={presenceUsers} currentUser={userId} />
+        </div>
+
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={handleExport} className="ui-btn ui-btn-ghost ui-btn-sm">
+            <Download size={13} /> Export
+          </button>
+          <button
+            onClick={() => setShowHistory((s) => !s)}
+            className={`ui-btn ui-btn-sm ${showHistory ? 'ui-btn-primary' : 'ui-btn-ghost'}`}
+          >
+            <Clock size={13} /> History
+          </button>
+          <button onClick={toggle} className="ui-btn ui-btn-ghost ui-btn-sm" title="Toggle theme">
+            {theme === 'light' ? <Moon size={13} /> : <Sun size={13} />}
           </button>
         </div>
       </div>
 
       {/* ── Editor + sidebar ─────────────────────────────────────────────── */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <div style={{ flex: 1, overflow: 'auto' }}>
+        <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-card)' }}>
           <div ref={editorRef} style={{ height: '100%' }} />
         </div>
         {showHistory && (
@@ -188,14 +214,3 @@ export default function Editor({ documentId, userId, authToken }) {
     </div>
   );
 }
-
-const btnStyle = {
-  padding:       '6px 14px',
-  borderRadius:  6,
-  border:        '1px solid #6366f1',
-  color:         '#6366f1',
-  background:    '#fff',
-  cursor:        'pointer',
-  fontSize:      13,
-  fontWeight:    600,
-};
