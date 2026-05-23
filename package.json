@@ -2,7 +2,7 @@
   "name": "collaborative-doc-editor",
   "version": "1.0.0",
   "scripts": {
-    "build": "cd client && npm install && npm run build && cp -r dist ../server/client-dist",
+    "build": "cd client && npm install --include=dev && npm run build && cp -r dist ../server/client-dist",
     "start": "cd server && npm install && node src/server.js"
   }
 }
