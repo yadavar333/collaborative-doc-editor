@@ -148,11 +148,9 @@ export default function Editor({ documentId, userId, authToken }) {
     return () => { ws.disconnect(); };
   }, [documentId, userId, authToken]);
 
-  const handleExport = async () => {
-    const res = await fetch(`/api/history/${documentId}/export`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    });
-    const blob = await res.blob();
+  const handleExport = () => {
+    const text = quillRef.current?.getText() ?? '';
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
