@@ -5,33 +5,31 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const publisher  = createClient({ url: REDIS_URL });
 const subscriber = createClient({ url: REDIS_URL });
 
-let connected = false;
+// Surface errors without crashing the process.
+publisher.on('error',  (err) => console.error('[redis:pub]', err.message));
+subscriber.on('error', (err) => console.error('[redis:sub]', err.message));
 
-async function ensureConnected() {
-  if (connected) return;
-  await publisher.connect();
-  await subscriber.connect();
-  connected = true;
-  console.log('[redis] connected');
-}
+// Connect once at startup. redis v4 handles reconnections automatically —
+// never call connect() again; the "Socket already opened" errors were caused
+// by the old ensureConnected() helper re-calling connect() after auth failures.
+publisher.connect().catch((err) =>
+  console.error('[redis:pub] initial connect failed:', err.message),
+);
+subscriber.connect().catch((err) =>
+  console.error('[redis:sub] initial connect failed:', err.message),
+);
 
 /**
  * Publish a document update to all instances subscribed to this doc channel.
- * @param {string} documentId
- * @param {object} messagePayload
  */
 export async function publishDocUpdate(documentId, messagePayload) {
-  await ensureConnected();
   await publisher.publish(`doc:${documentId}`, JSON.stringify(messagePayload));
 }
 
 /**
- * Subscribe to a document channel. Triggers callback on every message.
- * @param {string}   documentId
- * @param {Function} callback - receives the parsed payload object
+ * Subscribe to a document channel.
  */
 export async function subscribeToDoc(documentId, callback) {
-  await ensureConnected();
   await subscriber.subscribe(`doc:${documentId}`, (raw) => {
     try {
       callback(JSON.parse(raw));
@@ -43,9 +41,7 @@ export async function subscribeToDoc(documentId, callback) {
 
 /**
  * Unsubscribe from a document channel.
- * @param {string} documentId
  */
 export async function unsubscribeFromDoc(documentId) {
-  await ensureConnected();
-  await subscriber.unsubscribe(`doc:${documentId}`);
+  await subscriber.unsubscribe(`doc:${documentId}`).catch(() => {});
 }
